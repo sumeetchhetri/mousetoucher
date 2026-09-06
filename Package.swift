@@ -16,8 +16,14 @@ let package = Package(
         .target(
             name: "MouseToucherLib",
             dependencies: [],
-            path: "Sources",
-            sources: ["TapDetector.swift", "AppDelegate.swift"]
+            path: ".",
+            exclude: [
+                "Tests", "build", "AppDelegate.swift", "MultitouchManager.swift",
+                "Preferences.swift", "main.swift", "MultitouchBridge.h", "Info.plist",
+                "README.md", "TESTING.md", "LICENSE", "mousetoucher-dark.png",
+                "mousetoucher-light.png", "build.sh", "run_tests.sh"
+            ],
+            sources: ["TapDetector.swift", "TwoFingerTapDetector.swift"]
         ),
         .testTarget(
             name: "MouseToucherTests",

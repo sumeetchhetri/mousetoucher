@@ -14,6 +14,7 @@ Mouse Toucher brings trackpad-style tap-to-click functionality to the Apple Magi
 
 - 🖱️ **Tap left side** for left-click
 - 🖱️ **Tap right side** for right-click
+- ✌️ **Two-finger tap** to lock/unlock dragging
 - ⚡ **Fast & responsive** - no noticeable delay
 - 🎯 **Easy toggle** on/off from the menu bar
 - 🔒 **Privacy-focused** - runs entirely on your Mac, no network access
@@ -68,11 +69,19 @@ That's it! You'll see a mouse icon in your menu bar.
    - Tap **right side** = right-click (context menu)
 3. You can still click the mouse button normally - tapping is just an additional way to click
 
+### Drag Lock
+
+Quickly tap the touch surface with two fingers to hold the primary mouse button down. Move the
+mouse to drag without keeping either finger on the touch surface, then two-finger tap again to
+release. As a safety fallback, a one-finger tap also releases an active drag lock without
+producing another click. Disabling or quitting Mouse Toucher releases it as well.
+
 ### Menu Bar Controls
 
 Click the mouse icon in your menu bar to:
 
 - **Enable/Disable** tap-to-click (checkmark shows when enabled)
+- **View drag-lock state** – the status changes between Locked and Unlocked
 - **Right Click Zone** – choose where the right-click half of the mouse begins (40%–90% across the surface; default 60%). The choice is remembered between launches.
 - **View About** information
 - **Quit** the app

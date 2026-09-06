@@ -8,6 +8,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     private var hasStartedMultitouch = false
     private var hasRequestedAccessibilityPrompt = false
     private var hasShownAccessibilityInstructions = false
+    private weak var dragLockStatusItem: NSMenuItem?
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         setupMenuBar()
@@ -50,6 +51,11 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         let enabledItem = NSMenuItem(title: "Tap to Click: Enabled", action: #selector(toggleEnabled), keyEquivalent: "")
         enabledItem.state = isEnabled ? .on : .off
         menu.addItem(enabledItem)
+
+        let dragLockItem = NSMenuItem(title: "Drag Lock: Unlocked (Two-Finger Tap)", action: nil, keyEquivalent: "")
+        dragLockItem.isEnabled = false
+        menu.addItem(dragLockItem)
+        dragLockStatusItem = dragLockItem
 
         menu.addItem(NSMenuItem.separator())
         menu.addItem(buildRightClickZoneItem())
@@ -128,6 +134,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
 
         • Tap left side for left click
         • Tap right side for right click
+        • Two-finger tap to toggle drag lock
 
         Version \(version)
 
@@ -160,6 +167,12 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         multitouchManager = MultitouchManager()
         multitouchManager?.onClickSynthesized = { [weak self] location, isRightClick in
             self?.synthesizeClick(at: location, isRightClick: isRightClick)
+        }
+        multitouchManager?.onDragLockChanged = { [weak self] location, isLocked in
+            self?.synthesizeDragLock(at: location, isLocked: isLocked)
+            DispatchQueue.main.async { [weak self] in
+                self?.updateDragLockStatus(isLocked: isLocked)
+            }
         }
         multitouchManager?.start()
     }
@@ -217,5 +230,27 @@ class AppDelegate: NSObject, NSApplicationDelegate {
                 mouseUp.post(tap: .cghidEventTap)
             }
         }
+    }
+
+    /// Holds or releases the primary mouse button. Pointer movement produced by the physical
+    /// mouse while the button is held is interpreted by macOS as dragging.
+    func synthesizeDragLock(at location: CGPoint, isLocked: Bool) {
+        guard isOnActiveDisplay(location) else { return }
+
+        let eventType: CGEventType = isLocked ? .leftMouseDown : .leftMouseUp
+        if let event = CGEvent(
+            mouseEventSource: nil,
+            mouseType: eventType,
+            mouseCursorPosition: location,
+            mouseButton: .left
+        ) {
+            event.post(tap: .cghidEventTap)
+        }
+    }
+
+    private func updateDragLockStatus(isLocked: Bool) {
+        dragLockStatusItem?.title = isLocked
+            ? "Drag Lock: Locked (Two-Finger Tap to Release)"
+            : "Drag Lock: Unlocked (Two-Finger Tap)"
     }
 }
