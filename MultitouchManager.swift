@@ -8,6 +8,7 @@ class MultitouchManager {
     private var tapDetector = TapDetector(tapTimeThreshold: 0.25, tapMovementThreshold: 0.08)
     private var twoFingerTapDetector = TwoFingerTapDetector(tapTimeThreshold: 0.35, movementThreshold: 0.12)
     private var isEnabled = true
+    private var isDragLockAvailable = false
     private var activeTouch: Int32 = -1
     private var touchStartX: Float = 0.0
     private var touchStartY: Float = 0.0
@@ -71,6 +72,13 @@ class MultitouchManager {
         isEnabled = enabled
     }
 
+    func setDragLockAvailable(_ available: Bool) {
+        if !available {
+            releaseDragLock()
+        }
+        isDragLockAvailable = available
+    }
+
     func processTouches(_ touches: UnsafeMutablePointer<MTTouch>, numTouches: Int, timestamp: Double) {
         guard isEnabled else { return }
 
@@ -95,7 +103,9 @@ class MultitouchManager {
         switch twoFingerResult {
         case .recognized:
             cancelSingleTouchTracking()
-            toggleDragLock()
+            if isDragLockAvailable {
+                toggleDragLock()
+            }
             return
         case .rejectedMultiTouchGesture:
             cancelSingleTouchTracking()

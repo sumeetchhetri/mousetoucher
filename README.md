@@ -76,6 +76,9 @@ mouse to drag without keeping either finger on the touch surface, then two-finge
 release. As a safety fallback, a one-finger tap also releases an active drag lock without
 producing another click. Disabling or quitting Mouse Toucher releases it as well.
 
+The drag event transformer is enabled only while drag lock is active, so normal pointer movement
+and one-finger tap-to-click do not pass through it.
+
 ### Menu Bar Controls
 
 Click the mouse icon in your menu bar to:
