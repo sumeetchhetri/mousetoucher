@@ -6,7 +6,9 @@ import AppKit
 class MultitouchManager {
     private var devices: [MTDeviceRef] = []
     private var tapDetector = TapDetector(tapTimeThreshold: 0.25, tapMovementThreshold: 0.08)
+    private var twoFingerTapDetector = TwoFingerTapDetector(tapTimeThreshold: 0.35, movementThreshold: 0.12)
     private var isEnabled = true
+    private var isDragLockAvailable = false
     private var activeTouch: Int32 = -1
     private var touchStartX: Float = 0.0
     private var touchStartY: Float = 0.0
@@ -22,6 +24,8 @@ class MultitouchManager {
     fileprivate static var sharedInstance: MultitouchManager?
 
     var onClickSynthesized: ((CGPoint, Bool) -> Void)?
+    var onDragLockChanged: ((CGPoint, Bool) -> Void)?
+    private(set) var isDragLocked = false
 
     init() {
         MultitouchManager.sharedInstance = self
@@ -50,6 +54,9 @@ class MultitouchManager {
     }
 
     func stop() {
+        releaseDragLock()
+        resetTouchTracking()
+
         for device in devices {
             MTUnregisterContactFrameCallback(device, touchCallback)
             MTDeviceStop(device)
@@ -58,7 +65,18 @@ class MultitouchManager {
     }
 
     func setEnabled(_ enabled: Bool) {
+        if !enabled {
+            releaseDragLock()
+            resetTouchTracking()
+        }
         isEnabled = enabled
+    }
+
+    func setDragLockAvailable(_ available: Bool) {
+        if !available {
+            releaseDragLock()
+        }
+        isDragLockAvailable = available
     }
 
     func processTouches(_ touches: UnsafeMutablePointer<MTTouch>, numTouches: Int, timestamp: Double) {
@@ -67,12 +85,55 @@ class MultitouchManager {
         // The callback comes from a private framework; don't trust a negative count.
         guard numTouches >= 0 else { return }
 
+        let surfaceTouches = (0..<numTouches).map { index in
+            let touch = touches[index]
+            return SurfaceTouch(
+                identifier: touch.identifier,
+                position: CGPoint(
+                    x: CGFloat(touch.normalized.position.x),
+                    y: CGFloat(touch.normalized.position.y)
+                )
+            )
+        }
+        let twoFingerResult = twoFingerTapDetector.process(
+            touches: surfaceTouches,
+            timestamp: timestamp
+        )
+
+        switch twoFingerResult {
+        case .recognized:
+            cancelSingleTouchTracking()
+            if isDragLockAvailable {
+                toggleDragLock()
+            }
+            return
+        case .rejectedMultiTouchGesture:
+            cancelSingleTouchTracking()
+            return
+        case .none:
+            break
+        }
+
+        // Once a second finger has participated, wait for every finger to lift. Otherwise the
+        // last remaining finger could be mistaken for a fresh one-finger click.
+        if twoFingerTapDetector.suppressesSingleFingerTap {
+            cancelSingleTouchTracking()
+            return
+        }
+
         if numTouches == 0 {
             if activeTouch != -1 {
                 // Get cursor position directly from CGEvent (already in correct coordinate space)
                 let cgLocation = CGEvent(source: nil)?.location ?? CGPoint.zero
 
-                if let tapLocation = tapDetector.touchEnded(at: cgLocation) {
+                if isDragLocked {
+                    // Fallback release: a clean one-finger tap releases an active drag lock without
+                    // producing another click. Moving the mouse or resting a finger while dragging
+                    // is not a tap and will not release the lock.
+                    if tapDetector.touchEnded(at: cgLocation) != nil {
+                        releaseDragLock()
+                    }
+                } else if let tapLocation = tapDetector.touchEnded(at: cgLocation) {
                     let isRightClick = touchStartX > rightClickThreshold
                     onClickSynthesized?(tapLocation, isRightClick)
                 }
@@ -108,7 +169,7 @@ class MultitouchManager {
                         touchStartX = 0.0
                         touchStartY = 0.0
                     } else {
-                        // Check cursor movement too
+                        // Check cursor movement too (physical mouse movement cancels tap)
                         let moved = tapDetector.touchMoved(to: cgLocation)
                         if moved {
                             activeTouch = -1
@@ -119,13 +180,33 @@ class MultitouchManager {
                 }
             }
         } else if numTouches > 1 {
-            if activeTouch != -1 {
-                tapDetector.reset()
-                activeTouch = -1
-                touchStartX = 0.0
-                touchStartY = 0.0
-            }
+            cancelSingleTouchTracking()
         }
+    }
+
+    private func toggleDragLock() {
+        isDragLocked.toggle()
+        let location = CGEvent(source: nil)?.location ?? CGPoint.zero
+        onDragLockChanged?(location, isDragLocked)
+    }
+
+    private func releaseDragLock() {
+        guard isDragLocked else { return }
+        isDragLocked = false
+        let location = CGEvent(source: nil)?.location ?? CGPoint.zero
+        onDragLockChanged?(location, false)
+    }
+
+    private func resetTouchTracking() {
+        twoFingerTapDetector.reset()
+        cancelSingleTouchTracking()
+    }
+
+    private func cancelSingleTouchTracking() {
+        tapDetector.reset()
+        activeTouch = -1
+        touchStartX = 0.0
+        touchStartY = 0.0
     }
 
     deinit {

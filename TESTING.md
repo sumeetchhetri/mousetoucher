@@ -2,22 +2,25 @@
 
 ## Overview
 
-This document describes the testing strategy and implementation for the Mouse Toucher application. The test suite ensures the quality and reliability of the tap-to-click functionality.
+This document describes the testing strategy and implementation for the Mouse Toucher application. The test suite ensures the quality and reliability of tap detection, gesture processing, and drag-lock functionality.
 
 ## Test Architecture
 
-The codebase is structured to be highly testable:
+The codebase is structured to isolate core gesture logic for maximum testability:
 
 ```
 MouseToucher/
-├── Sources/
-│   ├── TapDetector.swift    # Pure logic - highly testable
-│   └── AppDelegate.swift     # Integration layer
-├── Tests/
-│   ├── TapDetectorTests.swift    # 22 unit tests
-│   └── AppDelegateTests.swift    # 9 integration tests
-└── main.swift               # Entry point
+├── TapDetector.swift             # Single-finger tap logic (pure Swift, unit-tested)
+├── TwoFingerTapDetector.swift    # Two-finger tap logic (pure Swift, unit-tested)
+├── MultitouchManager.swift       # MultitouchSupport bridge & gesture coordinator
+├── AppDelegate.swift             # Application lifecycle, menu bar & CGEvent posting
+├── Preferences.swift             # Settings persistence
+└── Tests/
+    ├── TapDetectorTests.swift            # 22 unit tests
+    └── TwoFingerTapDetectorTests.swift   # 8 unit tests
 ```
+
+The pure-logic components (`TapDetector` and `TwoFingerTapDetector`) run independently of system event taps and private frameworks, allowing instant, deterministic unit testing via Swift Package Manager.
 
 ## Running Tests
 
@@ -27,21 +30,22 @@ MouseToucher/
 # Run all tests
 ./run_tests.sh
 
-# Or use Swift Package Manager
+# Or use Swift Package Manager directly
 swift test
 
 # Run with verbose output
 swift test --verbose
 
-# Run specific test
+# Run specific test suites
 swift test --filter TapDetectorTests
+swift test --filter TwoFingerTapDetectorTests
 ```
 
 ## Test Suites
 
 ### TapDetectorTests (22 tests)
 
-Comprehensive unit tests for the core tap detection logic.
+Comprehensive unit tests for single-finger tap detection.
 
 #### Basic Tap Detection (6 tests)
 - ✅ `testValidTap_WithinTimeAndMovementThreshold` - Verifies valid taps are detected
@@ -78,169 +82,51 @@ Comprehensive unit tests for the core tap detection logic.
 
 #### Performance (1 test)
 - ✅ `testPerformance_RapidTaps` - Benchmarks 1000 rapid taps
-  - Average: ~0.001s for 1000 taps
-  - Confirms low overhead
 
-### AppDelegateTests (9 tests)
+---
 
-Integration tests for application-level behavior.
+### TwoFingerTapDetectorTests (8 tests)
 
-#### Initialization (2 tests)
-- ✅ `testInitialization_DefaultState` - Verifies default configuration
-- ✅ `testStateManagement_EnabledByDefault` - Ensures enabled on startup
+Unit tests for multi-touch gesture processing, staggered landings, and drag-lock toggles.
 
-#### Toggle Functionality (3 tests)
-- ✅ `testToggleEnabled_FromEnabledToDisabled` - Tests disabling
-- ✅ `testToggleEnabled_FromDisabledToEnabled` - Tests enabling
-- ✅ `testToggleEnabled_MultipleToggles` - Validates toggle state consistency
-
-#### Integration (4 tests)
-- ✅ `testTapDetectorIntegration_InitializedWithDefaults` - Verifies default thresholds
-- ✅ `testTapDetectorIntegration_RespectsEnabledState` - Tests enable/disable integration
-- ✅ `testStateManagement_TapDetectorNotTrackingInitially` - Ensures clean startup
-- ✅ `testSynthesizeClick_CreatesEvents` - Validates event synthesis
+- ✅ `testTwoFingerTap_WithStaggeredLandingAndLift_IsRecognized` - Accurately recognizes taps even when fingers do not land or lift in the exact same frame
+- ✅ `testSingleFingerTap_IsNotClaimed` - Ensures single-finger touches are ignored by multi-touch detector
+- ✅ `testTwoFingerTap_AtTimeThreshold_IsRejected` - Rejects touches exceeding duration threshold
+- ✅ `testTwoFingerTap_WithTooMuchMovement_IsRejected` - Rejects scrolling or moving gestures
+- ✅ `testThreeFingerGesture_IsRejected` - Prevents 3+ finger gestures from triggering drag lock
+- ✅ `testTwoIdentifiersWithoutOverlap_AreRejected` - Rejects sequential distinct touches without simultaneous overlap
+- ✅ `testResetClearsPartialGesture` - Verifies clean state reset
+- ✅ `testInvalidGesture_DoesNotPoisonNextTap` - Ensures rejected gestures do not contaminate subsequent valid taps
 
 ## Test Results
 
 ```
 Test Suite 'All tests' passed
-  Executed 31 tests, with 0 failures (0 unexpected)
+  Executed 30 tests, with 0 failures (0 unexpected)
   Total duration: ~1.6 seconds
 
 TapDetectorTests: 22/22 passed ✅
-AppDelegateTests: 9/9 passed ✅
+TwoFingerTapDetectorTests: 8/8 passed ✅
 ```
-
-## Testing Strategy
-
-### Unit Testing (TapDetectorTests)
-
-The `TapDetector` class is designed as a pure logic component with no dependencies on system frameworks. This allows for:
-
-- **Fast execution**: Tests run in milliseconds
-- **Deterministic results**: No flaky tests
-- **Easy debugging**: Simple input/output verification
-- **High coverage**: Every code path is tested
-
-### Integration Testing (AppDelegateTests)
-
-Integration tests focus on component interaction:
-
-- State management between components
-- Enable/disable functionality
-- Configuration propagation
-
-**Note**: UI and event system tests require window server connections unavailable in test environments. These are verified through:
-- Manual testing
-- Real-world usage
-- The comprehensive unit test coverage of underlying logic
-
-## Code Coverage
-
-The test suite provides extensive coverage of critical paths:
-
-- **Tap Detection Logic**: 100% coverage
-  - All threshold checks
-  - All state transitions
-  - All edge cases
-
-- **App State Management**: ~90% coverage
-  - Enable/disable toggle
-  - Configuration
-  - Integration points
-
-- **UI Code**: Manual testing required
-  - Menu bar creation
-  - Event tap setup
-  - Alert dialogs
-
-## Continuous Integration
-
-The test suite is designed to be CI-friendly:
-
-```yaml
-# Example GitHub Actions workflow
-- name: Run tests
-  run: swift test
-
-# Exit code 0 on success, non-zero on failure
-```
-
-## Testing Best Practices
-
-### When Adding New Features
-
-1. Write tests first (TDD)
-2. Ensure all edge cases are covered
-3. Add performance tests for hot paths
-4. Update this documentation
-
-### When Fixing Bugs
-
-1. Write a failing test that reproduces the bug
-2. Fix the bug
-3. Verify the test passes
-4. Add regression test to suite
-
-### Test Naming Convention
-
-Tests follow the pattern: `test<Component>_<Condition>_<ExpectedBehavior>`
-
-Examples:
-- `testValidTap_NoMovement` - Tests valid tap with no movement
-- `testToggleEnabled_FromEnabledToDisabled` - Tests toggle behavior
-
-## Performance Benchmarks
-
-Current performance metrics (from test suite):
-
-| Operation | Time | Throughput |
-|-----------|------|------------|
-| 1000 rapid taps | ~1.4ms | ~714,000 taps/sec |
-| Single tap detection | ~1.4μs | Sub-microsecond |
-
-These metrics ensure the app adds negligible overhead to mouse operations.
-
-## Future Testing Improvements
-
-Potential enhancements:
-
-- [ ] UI testing with XCTest UI framework
-- [ ] Memory leak detection tests
-- [ ] Long-running stress tests
-- [ ] Multi-threaded safety tests
-- [ ] Accessibility compliance tests
 
 ## Manual Testing Checklist
 
-For features that can't be automatically tested:
+For features that interact with hardware, private frameworks, or the Window Server:
 
+### Tap-to-Click
 - [ ] App icon appears in menu bar
 - [ ] Menu items respond to clicks
 - [ ] Toggle updates menu item title and state
 - [ ] Quit command terminates app
-- [ ] Accessibility permission dialog appears
-- [ ] Actual taps on Magic Mouse trigger clicks
-- [ ] Enable/disable toggle works in real-time
-- [ ] No crashes during extended use
+- [ ] Accessibility permission dialog appears when untrusted
+- [ ] Tap left side of mouse triggers left-click
+- [ ] Tap right side of mouse triggers right-click
+- [ ] Right-click zone threshold adjusts in menu bar and persists
 
-## Debugging Failed Tests
-
-If tests fail:
-
-1. Check test output for specific failure
-2. Run failing test in isolation: `swift test --filter <TestName>`
-3. Add print statements to debug
-4. Verify threshold values match expectations
-5. Check for timing-sensitive tests (may need adjustment)
-
-## Contact
-
-For test-related questions or issues, please file an issue on the project repository.
-
----
-
-**Last Updated**: October 2025
-**Test Suite Version**: 1.0
-**Total Tests**: 31 (22 unit + 9 integration)
-**Success Rate**: 100% ✅
+### Drag Lock
+- [ ] Quick two-finger tap engages drag lock (status shows `Locked`)
+- [ ] Moving mouse while drag lock is engaged drags windows/selection without keeping fingers on surface
+- [ ] Moving mouse with fingers resting on surface does not accidentally release drag lock
+- [ ] Second two-finger tap cleanly disengages drag lock (status shows `Unlocked`)
+- [ ] Stationary one-finger tap cleanly releases an active drag lock without producing another click
+- [ ] Disabling tap-to-click or quitting the app automatically releases an active drag lock

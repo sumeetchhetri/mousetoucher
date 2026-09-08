@@ -5,9 +5,34 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     var statusItem: NSStatusItem?
     var multitouchManager: MultitouchManager?
     var isEnabled = true
+    private var dragEventTap: CFMachPort?
+    private var dragEventTapRunLoopSource: CFRunLoopSource?
+    private let dragEventSource: CGEventSource? = {
+        guard let source = CGEventSource(stateID: .hidSystemState) else { return nil }
+
+        // Let physical mouse and keyboard input through immediately while the synthetic button
+        // is held. This source is used only by drag lock; ordinary tap-to-click keeps its old
+        // event path.
+        source.localEventsSuppressionInterval = 0
+        let permitAllLocalEvents: CGEventFilterMask = [
+            .permitLocalMouseEvents,
+            .permitLocalKeyboardEvents,
+            .permitSystemDefinedEvents
+        ]
+        source.setLocalEventsFilterDuringSuppressionState(
+            permitAllLocalEvents,
+            state: .eventSuppressionStateSuppressionInterval
+        )
+        source.setLocalEventsFilterDuringSuppressionState(
+            permitAllLocalEvents,
+            state: .eventSuppressionStateRemoteMouseDrag
+        )
+        return source
+    }()
     private var hasStartedMultitouch = false
     private var hasRequestedAccessibilityPrompt = false
     private var hasShownAccessibilityInstructions = false
+    private weak var dragLockStatusItem: NSMenuItem?
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         setupMenuBar()
@@ -36,6 +61,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
 
     func applicationWillTerminate(_ notification: Notification) {
         multitouchManager?.stop()
+        tearDownDragEventTap()
     }
 
     func setupMenuBar() {
@@ -50,6 +76,11 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         let enabledItem = NSMenuItem(title: "Tap to Click: Enabled", action: #selector(toggleEnabled), keyEquivalent: "")
         enabledItem.state = isEnabled ? .on : .off
         menu.addItem(enabledItem)
+
+        let dragLockItem = NSMenuItem(title: "Drag Lock: Unlocked (Two-Finger Tap)", action: nil, keyEquivalent: "")
+        dragLockItem.isEnabled = false
+        menu.addItem(dragLockItem)
+        dragLockStatusItem = dragLockItem
 
         menu.addItem(NSMenuItem.separator())
         menu.addItem(buildRightClickZoneItem())
@@ -128,6 +159,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
 
         • Tap left side for left click
         • Tap right side for right click
+        • Two-finger tap to toggle drag lock
 
         Version \(version)
 
@@ -157,11 +189,101 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         guard !hasStartedMultitouch else { return }
         hasStartedMultitouch = true
 
-        multitouchManager = MultitouchManager()
-        multitouchManager?.onClickSynthesized = { [weak self] location, isRightClick in
+        let canTransformDragEvents = setUpDragEventTap()
+        let manager = MultitouchManager()
+        manager.setDragLockAvailable(canTransformDragEvents)
+        multitouchManager = manager
+
+        manager.onClickSynthesized = { [weak self] location, isRightClick in
             self?.synthesizeClick(at: location, isRightClick: isRightClick)
         }
-        multitouchManager?.start()
+        manager.onDragLockChanged = { [weak self] location, isLocked in
+            guard let self = self else { return }
+
+            DispatchQueue.main.async { [weak self] in
+                guard let self = self else { return }
+
+                // Enable the transformer before mouse-down, and disable it only after mouse-up.
+                // It is therefore absent from the normal one-finger click path.
+                if isLocked {
+                    self.setDragEventTapEnabled(true)
+                    self.synthesizeDragLock(at: location, isLocked: true)
+                } else {
+                    self.synthesizeDragLock(at: location, isLocked: false)
+                    self.setDragEventTapEnabled(false)
+                }
+                self.updateDragLockStatus(isLocked: isLocked)
+            }
+        }
+        manager.start()
+
+        if !canTransformDragEvents {
+            dragLockStatusItem?.title = "Drag Lock: Unavailable"
+        }
+    }
+
+    /// Creates a session-level event transformer and leaves it disabled until drag lock starts.
+    /// Session-level conversion delivers drag semantics to applications without intercepting the
+    /// HID input path used by Magic Mouse touch detection.
+    private func setUpDragEventTap() -> Bool {
+        guard dragEventTap == nil else { return true }
+
+        let eventMask = CGEventMask(1) << CGEventType.mouseMoved.rawValue
+        guard let eventTap = CGEvent.tapCreate(
+            tap: .cgSessionEventTap,
+            place: .headInsertEventTap,
+            options: .defaultTap,
+            eventsOfInterest: eventMask,
+            callback: dragEventCallback,
+            userInfo: Unmanaged.passUnretained(self).toOpaque()
+        ) else {
+            return false
+        }
+
+        CGEvent.tapEnable(tap: eventTap, enable: false)
+        let runLoopSource = CFMachPortCreateRunLoopSource(kCFAllocatorDefault, eventTap, 0)
+        dragEventTap = eventTap
+        dragEventTapRunLoopSource = runLoopSource
+        CFRunLoopAddSource(CFRunLoopGetMain(), runLoopSource, .commonModes)
+        return true
+    }
+
+    private func setDragEventTapEnabled(_ enabled: Bool) {
+        guard let eventTap = dragEventTap else { return }
+        CGEvent.tapEnable(tap: eventTap, enable: enabled)
+    }
+
+    private func tearDownDragEventTap() {
+        if let runLoopSource = dragEventTapRunLoopSource {
+            CFRunLoopRemoveSource(CFRunLoopGetMain(), runLoopSource, .commonModes)
+        }
+        if let eventTap = dragEventTap {
+            CFMachPortInvalidate(eventTap)
+        }
+        dragEventTapRunLoopSource = nil
+        dragEventTap = nil
+    }
+
+    fileprivate func handleDragEvent(type: CGEventType, event: CGEvent) -> Unmanaged<CGEvent>? {
+        if type == .tapDisabledByTimeout || type == .tapDisabledByUserInput {
+            if multitouchManager?.isDragLocked == true {
+                setDragEventTapEnabled(true)
+            }
+            return Unmanaged.passUnretained(event)
+        }
+
+        guard type == .mouseMoved else {
+            return Unmanaged.passUnretained(event)
+        }
+
+        event.type = .leftMouseDragged
+        event.setIntegerValueField(
+            .mouseEventButtonNumber,
+            value: Int64(CGMouseButton.left.rawValue)
+        )
+        event.setIntegerValueField(.mouseEventClickState, value: 1)
+        event.setDoubleValueField(.mouseEventPressure, value: 1.0)
+        return Unmanaged.passUnretained(event)
     }
 
     private func requestAccessibilityPermissionIfNeeded() {
@@ -218,4 +340,40 @@ class AppDelegate: NSObject, NSApplicationDelegate {
             }
         }
     }
+
+    /// Holds or releases the primary mouse button. Pointer movement produced by the physical
+    /// mouse while the button is held is interpreted by macOS as dragging.
+    func synthesizeDragLock(at location: CGPoint, isLocked: Bool) {
+        // When locking, verify location is on an active display.
+        // When unlocking, always post leftMouseUp unconditionally so the primary mouse button
+        // is never permanently stuck down.
+        if isLocked {
+            guard isOnActiveDisplay(location) else { return }
+        }
+
+        let eventType: CGEventType = isLocked ? .leftMouseDown : .leftMouseUp
+        if let event = CGEvent(
+            mouseEventSource: dragEventSource,
+            mouseType: eventType,
+            mouseCursorPosition: location,
+            mouseButton: .left
+        ) {
+            event.post(tap: .cghidEventTap)
+        }
+    }
+
+    private func updateDragLockStatus(isLocked: Bool) {
+        dragLockStatusItem?.title = isLocked
+            ? "Drag Lock: Locked (Two-Finger Tap to Release)"
+            : "Drag Lock: Unlocked (Two-Finger Tap)"
+    }
+}
+
+private let dragEventCallback: CGEventTapCallBack = { _, type, event, userInfo in
+    guard let userInfo = userInfo else {
+        return Unmanaged.passUnretained(event)
+    }
+
+    let appDelegate = Unmanaged<AppDelegate>.fromOpaque(userInfo).takeUnretainedValue()
+    return appDelegate.handleDragEvent(type: type, event: event)
 }
